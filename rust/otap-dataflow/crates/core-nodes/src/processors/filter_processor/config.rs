@@ -8,6 +8,10 @@
 //! in [`otel_arrow_dfe_pdata::otap::filter`] via [`Config::compile`], which
 //! compiles every regex pattern once (rejecting invalid patterns) instead of
 //! recompiling on each batch.
+//!
+//! Every config struct in this module uses `#[serde(deny_unknown_fields)]` so
+//! typos are rejected during config validation instead of being silently
+//! ignored. New config structs must do the same.
 
 use otel_arrow_dfe_config::error::Error as ConfigError;
 use otel_arrow_dfe_pdata::otap::filter::{
@@ -21,6 +25,7 @@ use serde::Deserialize;
 
 /// Top-level filter processor configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub metrics: MetricFilterConfig,
@@ -108,6 +113,7 @@ impl AnyValueConfig {
 
 /// An attribute key paired with a value to match.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyValueConfig {
     /// Attribute key.
     pub key: String,
@@ -155,6 +161,7 @@ fn compile_values(
 
 /// Log filter configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogFilterConfig {
     include: Option<LogMatchPropertiesConfig>,
     exclude: Option<LogMatchPropertiesConfig>,
@@ -181,6 +188,7 @@ impl LogFilterConfig {
 
 /// Log match properties configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogMatchPropertiesConfig {
     #[serde(default)]
     match_type: MatchType,
@@ -229,6 +237,7 @@ impl LogMatchPropertiesConfig {
 
 /// Log severity number match properties configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogSeverityNumberConfig {
     min: i32,
     match_undefined: bool,
@@ -253,6 +262,7 @@ impl LogSeverityNumberConfig {
 
 /// Metric filter configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricFilterConfig {
     include: Option<MetricMatchPropertiesConfig>,
     exclude: Option<MetricMatchPropertiesConfig>,
@@ -278,6 +288,7 @@ impl MetricFilterConfig {
 
 /// Metric match properties configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricMatchPropertiesConfig {
     #[serde(default)]
     match_type: MatchType,
@@ -307,6 +318,7 @@ impl MetricMatchPropertiesConfig {
 
 /// Trace filter configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TraceFilterConfig {
     include: Option<TraceMatchPropertiesConfig>,
     exclude: Option<TraceMatchPropertiesConfig>,
@@ -332,6 +344,7 @@ impl TraceFilterConfig {
 
 /// Trace match properties configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TraceMatchPropertiesConfig {
     #[serde(default)]
     match_type: MatchType,
@@ -389,6 +402,76 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Scenario: each filter config struct receives an otherwise valid object with an unknown key.
+    /// Guarantees: all nine config structs reject unknown fields and name the unexpected key.
+    #[test]
+    fn test_deserialize_rejects_unknown_fields() {
+        let cases = [
+            ("Config", "__bogus__", json!({"__bogus__": 1})),
+            (
+                "LogFilterConfig",
+                "log_record",
+                json!({"logs": {"log_record": ["x"]}}),
+            ),
+            (
+                "LogMatchPropertiesConfig",
+                "record_attribtues",
+                json!({"logs": {"include": {"record_attribtues": []}}}),
+            ),
+            (
+                "LogSeverityNumberConfig",
+                "max",
+                json!({
+                    "logs": {
+                        "include": {
+                            "severity_number": {"min": 9, "match_undefined": false, "max": 21}
+                        }
+                    }
+                }),
+            ),
+            (
+                "KeyValueConfig",
+                "match_type",
+                json!({
+                    "logs": {
+                        "include": {
+                            "record_attributes": [{"key": "k", "value": "v", "match_type": "regexp"}]
+                        }
+                    }
+                }),
+            ),
+            (
+                "MetricFilterConfig",
+                "includes",
+                json!({"metrics": {"includes": {}}}),
+            ),
+            (
+                "MetricMatchPropertiesConfig",
+                "metric_name",
+                json!({"metrics": {"include": {"metric_name": ["a"]}}}),
+            ),
+            (
+                "TraceFilterConfig",
+                "error_mode",
+                json!({"traces": {"error_mode": "ignore"}}),
+            ),
+            (
+                "TraceMatchPropertiesConfig",
+                "span_name",
+                json!({"traces": {"include": {"span_name": ["a"]}}}),
+            ),
+        ];
+
+        for (case_name, field, value) in cases {
+            let error = serde_json::from_value::<Config>(value).expect_err(case_name);
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("unknown field `{field}`")),
+                "{case_name}: expected unknown field `{field}`, got {message}"
+            );
+        }
+    }
+
     /// Scenario: a config with a syntactically invalid regex pattern is compiled.
     /// Guarantees: compilation fails with InvalidUserConfig rather than deferring
     /// the error to the first batch (where it would previously panic).
@@ -429,23 +512,61 @@ mod tests {
         let _ = config.compile().expect("strict patterns always compile");
     }
 
-    /// Scenario: the documented filter-processor config shape is deserialized and
-    /// compiled.
-    /// Guarantees: a realistic regexp config round-trips from JSON through compile
-    /// without error.
+    /// Scenario: the complete README filter config example is deserialized and compiled.
+    /// Guarantees: all documented fields remain accepted under strict deserialization
+    /// and compile without error.
     #[test]
     fn test_deserialize_and_compile_roundtrip() {
         let value = json!({
             "metrics": {
+                "include": {
+                    "match_type": "strict",
+                    "metric_names": ["http.server.request.count", "process.cpu.utilization"]
+                },
                 "exclude": {
                     "match_type": "regexp",
-                    "metric_names": ["^debug_.*$"]
+                    "metric_names": ["^internal\\..*$"]
                 }
             },
             "logs": {
                 "include": {
-                    "match_type": "regexp",
-                    "severity_texts": ["^(WARN|ERROR)$"]
+                    "match_type": "strict",
+                    "resource_attributes": [{"key": "deployment.environment", "value": "prod"}],
+                    "record_attributes": [],
+                    "severity_texts": ["WARN", "ERROR"],
+                    "severity_number": {"min": 13, "match_undefined": false},
+                    "bodies": ["checkout started", "failed to write to socket"]
+                },
+                "exclude": {
+                    "match_type": "strict",
+                    "resource_attributes": [{"key": "deployment.environment", "value": "staging"}],
+                    "record_attributes": [
+                        {"key": "component", "value": "db"},
+                        {"key": "retryable", "value": true}
+                    ],
+                    "severity_texts": ["WARN"],
+                    "severity_number": null,
+                    "bodies": ["checkout started"]
+                }
+            },
+            "traces": {
+                "include": {
+                    "match_type": "strict",
+                    "resource_attributes": [{"key": "deployment.environment", "value": "prod"}],
+                    "span_attributes": [],
+                    "span_names": ["checkout-warn", "checkout-error"],
+                    "event_names": ["checkout-event"],
+                    "event_attributes": [],
+                    "link_attributes": []
+                },
+                "exclude": {
+                    "match_type": "strict",
+                    "resource_attributes": [{"key": "deployment.environment", "value": "staging"}],
+                    "span_attributes": [{"key": "component", "value": "db"}],
+                    "span_names": ["payment-warn", "payment-error"],
+                    "event_names": ["payment-event"],
+                    "event_attributes": [{"key": "success", "value": false}],
+                    "link_attributes": [{"key": "correlation", "value": false}]
                 }
             }
         });

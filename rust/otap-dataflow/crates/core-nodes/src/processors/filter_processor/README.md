@@ -115,6 +115,10 @@ config:
           value: false
 ```
 
+Unknown fields are rejected at every level of the filter configuration:
+`--validate-and-exit`, engine startup, and live reconfiguration fail with an
+error that names the unexpected field.
+
 For a runnable metric-name filter pipeline, see
 [`configs/trafficgen-metric-filter-debug-noop.yaml`](../../../../../configs/trafficgen-metric-filter-debug-noop.yaml).
 

@@ -478,6 +478,48 @@ groups:
         );
     }
 
+    /// Scenario: validate-and-exit encounters an unknown field in a filter processor config.
+    /// Guarantees: startup validation rejects the config and identifies the node and unknown field.
+    #[test]
+    fn validate_engine_config_for_startup_rejects_unknown_filter_config_field() {
+        let engine_cfg = OtelDataflowSpec::from_yaml(
+            r#"
+version: otel_dataflow/v1
+engine: {}
+groups:
+  default:
+    pipelines:
+      main:
+        nodes:
+          receiver:
+            type: receiver:otlp
+            config:
+              protocols:
+                grpc:
+                  listening_addr: "127.0.0.1:4317"
+          filter:
+            type: processor:filter
+            config: {__bogus__: 1}
+          exporter:
+            type: exporter:noop
+            config: {}
+        connections:
+          - from: receiver
+            to: filter
+          - from: filter
+            to: exporter
+"#,
+        )
+        .expect("config should parse");
+
+        let error =
+            validate_engine_config_for_startup(&engine_cfg, &ControllerRunOptions::default())
+                .expect_err("validate-and-exit path should reject unknown filter config fields");
+        let message = error.to_string();
+        assert!(message.contains("node=filter"), "{message}");
+        assert!(message.contains("unknown field `__bogus__`"), "{message}");
+    }
+
     #[test]
     fn config_is_optional() {
         let args = Args::parse_from(["df_engine", "--validate-and-exit"]);
